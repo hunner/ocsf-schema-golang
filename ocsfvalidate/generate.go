@@ -81,6 +81,14 @@ func fetchSchema(className string, version string) error {
 		}.Encode(),
 	}
 
+	if base := os.Getenv("OCSF_SCHEMA_BASE_URL"); base != "" {
+		baseURL, err := url.Parse(base)
+		if err != nil {
+			return fmt.Errorf("invalid OCSF_SCHEMA_BASE_URL: %w", err)
+		}
+		ux.Scheme, ux.Host = baseURL.Scheme, baseURL.Host
+		ux.Path = path.Join(baseURL.Path, "classes", className)
+	}
 	log.Printf("fetching %s/%s from %s", className, version, ux.String())
 
 	// 	https://schema.ocsf.io/schema/1.2.0/classes/web_resources_activity?profiles=
@@ -106,7 +114,22 @@ func fetchSchema(className string, version string) error {
 	}
 	startTime := time.Now()
 	req.Header.Set("User-Agent", "ocsf-schema-golang/fetch-schema")
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 20 * time.Second}
+	var resp *http.Response
+	for attempt := 0; attempt < 3; attempt++ {
+		resp, err = client.Do(req)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			break
+		}
+		if err == nil {
+			err = fmt.Errorf("HTTP status %s", resp.Status)
+			resp.Body.Close()
+		}
+		if attempt < 2 {
+			log.Printf("fetch failed: %v; retrying", err)
+			time.Sleep(time.Duration(1<<attempt) * time.Second)
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("fetchSchema: http fetch failed: %w", err)
 	}
